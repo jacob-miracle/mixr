@@ -1150,6 +1150,12 @@ class PlayerDataMsg : public ::google::protobuf::Message {
   inline double cas() const;
   inline void set_cas(double value);
 
+  inline bool has_fuel_fraction() const;
+  inline void clear_fuel_fraction();
+  static const int kFuelFractionFieldNumber = 6;
+  inline double fuel_fraction() const;
+  inline void set_fuel_fraction(double value);
+
   GOOGLE_PROTOBUF_EXTENSION_ACCESSORS(PlayerDataMsg)
   // @@protoc_insertion_point(class_scope:mixr.recorder.pb.PlayerDataMsg)
  private:
@@ -1163,6 +1169,8 @@ class PlayerDataMsg : public ::google::protobuf::Message {
   inline void clear_has_beta();
   inline void set_has_cas();
   inline void clear_has_cas();
+  inline void set_has_fuel_fraction();
+  inline void clear_has_fuel_fraction();
 
   ::google::protobuf::internal::ExtensionSet _extensions_;
 
@@ -1175,6 +1183,7 @@ class PlayerDataMsg : public ::google::protobuf::Message {
   double alpha_;
   double beta_;
   double cas_;
+  double fuel_fraction_;
   friend void  protobuf_AddDesc_mixr_2frecorder_2fprotobuf_2fDataRecord_2eproto();
   friend void protobuf_AssignDesc_mixr_2frecorder_2fprotobuf_2fDataRecord_2eproto();
   friend void protobuf_ShutdownFile_mixr_2frecorder_2fprotobuf_2fDataRecord_2eproto();
@@ -5036,6 +5045,29 @@ inline void PlayerDataMsg::set_cas(double value) {
   // @@protoc_insertion_point(field_set:mixr.recorder.pb.PlayerDataMsg.cas)
 }
 
+// optional double fuel_fraction = 6;
+inline bool PlayerDataMsg::has_fuel_fraction() const {
+  return (_has_bits_[0] & 0x00000020u) != 0;
+}
+inline void PlayerDataMsg::set_has_fuel_fraction() {
+  _has_bits_[0] |= 0x00000020u;
+}
+inline void PlayerDataMsg::clear_has_fuel_fraction() {
+  _has_bits_[0] &= ~0x00000020u;
+}
+inline void PlayerDataMsg::clear_fuel_fraction() {
+  fuel_fraction_ = 0;
+  clear_has_fuel_fraction();
+}
+inline double PlayerDataMsg::fuel_fraction() const {
+  // @@protoc_insertion_point(field_get:mixr.recorder.pb.PlayerDataMsg.fuel_fraction)
+  return fuel_fraction_;
+}
+inline void PlayerDataMsg::set_fuel_fraction(double value) {
+  set_has_fuel_fraction();
+  fuel_fraction_ = value;
+  // @@protoc_insertion_point(field_set:mixr.recorder.pb.PlayerDataMsg.fuel_fraction)
+}
 // -------------------------------------------------------------------
 
 // PlayerDamagedEventMsg

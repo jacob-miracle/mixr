@@ -247,12 +247,13 @@ void protobuf_AssignDesc_mixr_2frecorder_2fprotobuf_2fDataRecord_2eproto() {
       ::google::protobuf::MessageFactory::generated_factory(),
       sizeof(PlayerRemovedEventMsg));
   PlayerDataMsg_descriptor_ = file->message_type(7);
-  static const int PlayerDataMsg_offsets_[5] = {
+  static const int PlayerDataMsg_offsets_[6] = {
     GOOGLE_PROTOBUF_GENERATED_MESSAGE_FIELD_OFFSET(PlayerDataMsg, id_),
     GOOGLE_PROTOBUF_GENERATED_MESSAGE_FIELD_OFFSET(PlayerDataMsg, state_),
     GOOGLE_PROTOBUF_GENERATED_MESSAGE_FIELD_OFFSET(PlayerDataMsg, alpha_),
     GOOGLE_PROTOBUF_GENERATED_MESSAGE_FIELD_OFFSET(PlayerDataMsg, beta_),
     GOOGLE_PROTOBUF_GENERATED_MESSAGE_FIELD_OFFSET(PlayerDataMsg, cas_),
+    GOOGLE_PROTOBUF_GENERATED_MESSAGE_FIELD_OFFSET(PlayerDataMsg, fuel_fraction_),
   };
   PlayerDataMsg_reflection_ =
     new ::google::protobuf::internal::GeneratedMessageReflection(
@@ -4186,6 +4187,7 @@ const int PlayerDataMsg::kStateFieldNumber;
 const int PlayerDataMsg::kAlphaFieldNumber;
 const int PlayerDataMsg::kBetaFieldNumber;
 const int PlayerDataMsg::kCasFieldNumber;
+const int PlayerDataMsg::kFuelFractionFieldNumber;
 #endif  // !_MSC_VER
 
 PlayerDataMsg::PlayerDataMsg()
@@ -4213,6 +4215,7 @@ void PlayerDataMsg::SharedCtor() {
   alpha_ = 0;
   beta_ = 0;
   cas_ = 0;
+  fuel_fraction_ = 0;
   ::memset(_has_bits_, 0, sizeof(_has_bits_));
 }
 
@@ -4261,8 +4264,8 @@ void PlayerDataMsg::Clear() {
     ::memset(&first, 0, n);                                \
   } while (0)
 
-  if (_has_bits_[0 / 32] & 31) {
-    ZR_(alpha_, cas_);
+  if (_has_bits_[0 / 32] & 63) {
+    ZR_(alpha_, fuel_fraction_);
     if (has_id()) {
       if (id_ != NULL) id_->::mixr::recorder::pb::PlayerId::Clear();
     }
@@ -4354,9 +4357,24 @@ bool PlayerDataMsg::MergePartialFromCodedStream(
         } else {
           goto handle_unusual;
         }
+        if (input->ExpectTag(49)) goto parse_fuel_fraction;
+        break;
+      }
+      // optional double fuel_fraction = 6;
+      case 6: {
+        if (tag == 49) {
+         parse_fuel_fraction:
+          DO_((::google::protobuf::internal::WireFormatLite::ReadPrimitive<
+                   double, ::google::protobuf::internal::WireFormatLite::TYPE_DOUBLE>(
+                 input, &fuel_fraction_)));
+          set_has_fuel_fraction();
+        } else {
+          goto handle_unusual;
+        }
         if (input->ExpectAtEnd()) goto success;
         break;
       }
+
 
       default: {
       handle_unusual:
@@ -4416,6 +4434,11 @@ void PlayerDataMsg::SerializeWithCachedSizes(
     ::google::protobuf::internal::WireFormatLite::WriteDouble(5, this->cas(), output);
   }
 
+  // optional double fuel_fraction = 6;
+  if (has_fuel_fraction()) {
+    ::google::protobuf::internal::WireFormatLite::WriteDouble(6, this->fuel_fraction(), output);
+  }
+
   // Extension range [50, 100)
   _extensions_.SerializeWithCachedSizes(
       50, 100, output);
@@ -4461,6 +4484,11 @@ void PlayerDataMsg::SerializeWithCachedSizes(
   // optional double cas = 5;
   if (has_cas()) {
     target = ::google::protobuf::internal::WireFormatLite::WriteDoubleToArray(5, this->cas(), target);
+  }
+
+  // optional double fuel_fraction = 6;
+  if (has_fuel_fraction()) {
+    target = ::google::protobuf::internal::WireFormatLite::WriteDoubleToArray(6, this->fuel_fraction(), target);
   }
 
   // Extension range [50, 100)
@@ -4512,6 +4540,11 @@ int PlayerDataMsg::ByteSize() const {
       total_size += 1 + 8;
     }
 
+    // optional double fuel_fraction = 6;
+    if (has_fuel_fraction()) {
+      total_size += 1 + 8;
+    }
+
   }
   total_size += _extensions_.ByteSize();
 
@@ -4556,6 +4589,9 @@ void PlayerDataMsg::MergeFrom(const PlayerDataMsg& from) {
     if (from.has_cas()) {
       set_cas(from.cas());
     }
+    if (from.has_fuel_fraction()) {
+      set_fuel_fraction(from.fuel_fraction());
+    }
   }
   _extensions_.MergeFrom(from._extensions_);
   mutable_unknown_fields()->MergeFrom(from.unknown_fields());
@@ -4593,6 +4629,7 @@ void PlayerDataMsg::Swap(PlayerDataMsg* other) {
     std::swap(alpha_, other->alpha_);
     std::swap(beta_, other->beta_);
     std::swap(cas_, other->cas_);
+    std::swap(fuel_fraction_, other->fuel_fraction_);
     std::swap(_has_bits_[0], other->_has_bits_[0]);
     _unknown_fields_.Swap(&other->_unknown_fields_);
     std::swap(_cached_size_, other->_cached_size_);

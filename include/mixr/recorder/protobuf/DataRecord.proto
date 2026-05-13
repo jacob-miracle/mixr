@@ -158,6 +158,7 @@ message PlayerDataMsg {
    optional double      alpha       = 3;  // angle of attack (degrees)
    optional double      beta        = 4;  // side slip (degrees)
    optional double      cas         = 5;  // calibrated airspeed (knots)
+   optional double      fuel_fraction = 6;  // fuel state (0.0 empty .. 1.0 full)
    
    extensions 50 to 99;     // Reserved fields
    extensions 100 to 999;   // User fields
