@@ -35,6 +35,30 @@ void Gmti::copyData(const Gmti& org, const bool)
 {
     BaseClass::copyData(org);
     poiVec = org.poiVec;
+    // Do NOT copy rng_ — each instance owns its own sub-stream (ADR-007).
+    // The new instance starts with no RNG; caller must re-inject via setRng().
+    rng_         = nullptr;
+    noiseStdRad_ = org.noiseStdRad_;
+    lastAzNoise_ = 0.0;
+    lastElNoise_ = 0.0;
+}
+
+//------------------------------------------------------------------------------
+// setRng() -- inject an IRng* sub-stream (ADR-007).
+// Takes ownership; deletes any previously held stream.
+//------------------------------------------------------------------------------
+void Gmti::setRng(base::IRng* rng)
+{
+    delete rng_;
+    rng_ = rng;
+}
+
+//------------------------------------------------------------------------------
+// setNoiseStdRad() -- set the Gaussian az/el noise standard deviation (radians).
+//------------------------------------------------------------------------------
+void Gmti::setNoiseStdRad(double stdRad)
+{
+    noiseStdRad_ = (stdRad >= 0.0) ? stdRad : 0.0;
 }
 
 //------------------------------------------------------------------------------
@@ -62,6 +86,23 @@ void Gmti::dynamics(const double dt)
         double grng{std::sqrt(x*x + y*y)};
         double az{std::atan2(y,x)};
         double el{std::atan2(-z,grng)};
+
+        // ---
+        // Inject Gaussian azimuth/elevation measurement noise (ADR-007).
+        //
+        // Draw noise from the injected sub-stream if one is available.
+        // When rng_ is nullptr (no stream injected) noise is zero so the
+        // component behaves identically to the pre-refactor baseline.
+        // ---
+        if (rng_ != nullptr && noiseStdRad_ > 0.0) {
+            lastAzNoise_ = rng_->normal(0.0, noiseStdRad_);
+            lastElNoise_ = rng_->normal(0.0, noiseStdRad_);
+        } else {
+            lastAzNoise_ = 0.0;
+            lastElNoise_ = 0.0;
+        }
+        az += lastAzNoise_;
+        el += lastElNoise_;
 
         // Get current antenna limits and search volume
         double leftLim{}, rightLim{};
