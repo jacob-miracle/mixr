@@ -128,8 +128,16 @@ typedef unsigned int flex_uint32_t;
  * integer for use as an array index.  If the signed char is negative,
  * we want to instead treat it as an 8-bit unsigned char, hence the
  * double cast.
+ *
+ * ADR-fix (T-U01): The EDL transition table has exactly 128 entries
+ * (7-bit ASCII only).  The original cast to unsigned char yields 0-255,
+ * so any non-ASCII byte (value 128-255) silently reads past the end of
+ * the table — undefined behaviour / crash on x86-64 Linux where plain
+ * char is signed.  Mask to 7 bits: non-ASCII bytes now map to slot 0
+ * which is the "no transition" row, matching the scanner's ASCII-only
+ * design intent.
  */
-#define YY_SC_TO_UI(c) ((unsigned int) (unsigned char) c)
+#define YY_SC_TO_UI(c) ((unsigned int) (unsigned char) (c) & 0x7fu)
 
 /* Enter a start condition.  This macro really ought to take a parameter,
  * but we do it the disgusting crufty way forced on us by the ()-less

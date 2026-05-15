@@ -1,0 +1,20 @@
+// utf8_comment.edl  --  regression test for T-U01 / EdlScanner UTF-8 fix
+//
+// Before the fix, any non-ASCII byte in a comment (or anywhere in the input
+// stream) would index the 128-entry yy_nxt transition table with a value in
+// the range 128-255, producing undefined behaviour (typically a crash or
+// garbage parse) on x86-64 Linux where plain char is signed.
+//
+// This file intentionally embeds non-ASCII UTF-8 sequences.  After the fix
+// the scanner must parse this file without crashing, producing an empty
+// object list (no top-level object declarations below).
+
+// Example non-ASCII sequences that previously triggered the bug:
+//   café     (UTF-8: 63 61 66 C3 A9 — 0xC3 and 0xA9 are > 127)
+//   naïve    (UTF-8: 6E 61 C3 AF 76 65)
+//   Müller   (UTF-8: 4D C3 BC 6C 6C 65 72)
+//   résumé   (UTF-8: 72 C3 A9 73 75 6D C3 A9)
+//   北京      (UTF-8: E5 8C 97 E4 BA AC — multi-byte CJK)
+
+// The object list is intentionally empty so parsers that stop on error do
+// not produce false positives from unrelated syntax issues.

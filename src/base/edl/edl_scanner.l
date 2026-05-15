@@ -25,6 +25,15 @@
 
 #define YY_BREAK  /* We'll put in the break commands to stop the warnings */
 
+/* ADR-fix: The transition table has 128 entries (7-bit ASCII only).
+ * The default YY_SC_TO_UI casts to unsigned char (0-255), which allows
+ * non-ASCII bytes (128-255) to index beyond the table end on platforms
+ * where char is signed (x86-64 Linux).  Mask to 7 bits so any non-ASCII
+ * byte maps to a safe slot (the scanner treats such bytes as "other" and
+ * falls through to the catch-all '.' rule). */
+#undef  YY_SC_TO_UI
+#define YY_SC_TO_UI(c) ((unsigned int)(unsigned char)(c) & 0x7fu)
+
 %}
 
 /*** Flex declarations and Options ***/
