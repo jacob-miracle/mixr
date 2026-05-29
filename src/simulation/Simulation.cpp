@@ -15,6 +15,9 @@
 #include "mixr/base/Statistic.hpp"
 #include "mixr/base/numeric/Boolean.hpp"
 #include "mixr/base/numeric/Integer.hpp"
+#include "mixr/base/numeric/Number.hpp"
+#include "mixr/base/random/IRng.hpp"
+#include "mixr/base/random/PcgRng.hpp"
 #include "mixr/base/units/times.hpp"
 #include "mixr/base/util/system_utils.hpp"
 
@@ -37,8 +40,9 @@ BEGIN_SLOTTABLE(Simulation)
 
    "numTcThreads",   // 7) Number of T/C threads to use with the player list
    "numBgThreads",   // 8) Number of background threads to use with the player list
-   "enableFrameTiming",     // 9) Enable/disable the frame timing
-   "printFrameTimingStats"  //10) Enable/disable the printing of the frame timing statistics
+   "enableFrameTiming",      // 9) Enable/disable the frame timing
+   "printFrameTimingStats",  //10) Enable/disable the printing of the frame timing statistics
+   "seedRng"                 //11) Master seed for the hierarchical splittable RNG (ADR-007)
    END_SLOTTABLE(Simulation)
 
 BEGIN_SLOT_MAP(Simulation)
@@ -55,6 +59,7 @@ BEGIN_SLOT_MAP(Simulation)
     ON_SLOT( 8, setSlotNumBgThreads,    base::Integer)
     ON_SLOT( 9, setSlotEnableFrameTiming,     base::Boolean)
     ON_SLOT(10, setSlotPrintFrameTimingStats, base::Boolean)
+    ON_SLOT(11, setSlotSeedRng,         base::Number)
 END_SLOT_MAP()
 
 Simulation::Simulation() : newPlayerQueue(MAX_NEW_PLAYERS)
@@ -132,6 +137,16 @@ void Simulation::copyData(const Simulation& org, const bool)
    eventWpnID = org.eventWpnID;
    relWpnId = org.relWpnId;
 
+   // RNG master seed (ADR-007). The root RNG itself is recreated by reset()
+   // from the master seed so two clones with the same seed remain
+   // byte-identical at the sub-stream level.
+   masterSeed_    = org.masterSeed_;
+   masterSeedSet_ = org.masterSeedSet_;
+   rootRng_.reset();
+   if (masterSeedSet_) {
+      rootRng_.reset(new base::PcgRng(masterSeed_));
+   }
+
    // ---
    // Terminate our threads and only copy the required number of threads;
    // reset() will create new ones.
@@ -200,6 +215,13 @@ void Simulation::deleteData()
       frameTimingStats->unref();
       frameTimingStats = nullptr;
    }
+
+   // Release the root RNG (held via std::unique_ptr; child sub-streams
+   // returned from split() are owned by their consumers — they are not
+   // tracked here, so this only frees the root).
+   rootRng_.reset();
+   masterSeedSet_ = false;
+   masterSeed_    = 0;
 }
 
 //------------------------------------------------------------------------------
@@ -406,6 +428,17 @@ void Simulation::reset()
          item = item->getNext();
       }
    }
+
+   // ---
+   // Re-derive the hierarchical RNG sub-tree from the stored master seed
+   // (ADR-007). This makes two reset() calls with the same master produce
+   // byte-identical sub-stream output for every (parent, child_id) pair,
+   // even after intervening draws on the root.
+   //
+   // If seedRng() was never called we still build a deterministic root from
+   // the default (zero) seed so consumers see a stable contract.
+   // ---
+   rootRng_.reset(new base::PcgRng(masterSeed_));
 
    BaseClass::reset();
 }
@@ -1357,6 +1390,52 @@ bool Simulation::setFrameTimingEnabled(const bool b)
 bool Simulation::setPrintFrameTimingStats(const bool b)
 {
    pfts = b;
+   return true;
+}
+
+//------------------------------------------------------------------------------
+// Hierarchical splittable RNG (ADR-007 push-API).
+//------------------------------------------------------------------------------
+
+// Store the master seed and rebuild the root PcgRng. Calling this twice with
+// the same master leaves split() outputs byte-identical because PcgRng::split
+// is const on the parent's state (splitmix64 hash of s_[0] ^ child_id).
+void Simulation::seedRng(uint64_t master)
+{
+   masterSeed_    = master;
+   masterSeedSet_ = true;
+   rootRng_.reset(new base::PcgRng(master));
+}
+
+// Returns a heap-allocated child sub-stream derived from the root. The caller
+// owns the returned pointer.
+//
+// If seedRng() has never been called, this lazily constructs a root from the
+// default (zero) seed so callers don't crash on an unseeded simulation. That
+// matches the ADR-007 day-1 contract: every consumer always gets a valid
+// IRng* regardless of whether the EDL author wired the seedRng slot.
+base::IRng* Simulation::split(uint64_t child_id)
+{
+   if (rootRng_ == nullptr) {
+      rootRng_.reset(new base::PcgRng(masterSeed_));
+   }
+   return rootRng_->split(child_id);
+}
+
+uint64_t Simulation::getMasterSeed() const
+{
+   return masterSeed_;
+}
+
+bool Simulation::setSlotSeedRng(const base::Number* const msg)
+{
+   if (msg == nullptr) return false;
+   // base::Integer (EDL <integer>) routes through this slot via inheritance;
+   // base::Number::asDouble() preserves uint32_t values exactly and the cast
+   // truncates safely. Negative values reinterpret to a large unsigned seed,
+   // which is fine — the RNG only cares about bit pattern.
+   const double v{msg->asDouble()};
+   seedRng(static_cast<uint64_t>(static_cast<int64_t>(v)));
    return true;
 }
 

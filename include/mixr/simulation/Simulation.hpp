@@ -6,9 +6,11 @@
 #include "mixr/base/safe_queue.hpp"
 #include "mixr/base/osg/Matrixd"
 #include <array>
+#include <cstdint>
+#include <memory>
 
 namespace mixr {
-namespace base { class Distance; class EarthModel; class Integer; class LatLon; class Pair; class Time; }
+namespace base { class Distance; class EarthModel; class Integer; class IRng; class LatLon; class Number; class Pair; class PcgRng; class Time; }
 namespace simulation {
 class IDataRecorder;
 class SimulationBgSyncThread;
@@ -54,6 +56,12 @@ class IPlayer;
 //    enableFrameTiming <base:Boolean>        ! Enable/disable the frame timing statistics (default: false)
 //
 //    printFrameTimingStats <base:Boolean>    ! Enable/disable the printing of the frame timing statistics (default: false)
+//
+//    seedRng        <base::Number>           ! Master seed for the hierarchical splittable RNG tree.
+//                                            ! Parsed as a uint64_t; truncates non-integer values via static_cast.
+//                                            ! Per ADR-007, every stochastic component pulls an IRng* sub-stream
+//                                            ! via Simulation::split(child_id). Two runs that share this seed
+//                                            ! produce byte-identical sub-stream output after reset(). (default: 0)
 //
 // The player list
 //
@@ -222,6 +230,24 @@ public:
     bool isFrameTimingEabled() const;                          // True if we're collecting frame timing
     bool isPrintFrameTimingEnabled() const;                    // True if we're printing the frame timing statistics
 
+    // ---
+    // Hierarchical splittable RNG (ADR-007 push-API).
+    //
+    //   seedRng(master) stores the master seed and (re)builds the root
+    //   PcgRng so subsequent split() calls derive from a known state.
+    //   reset() re-derives the root from the stored master, giving
+    //   byte-stable sub-stream output across resets with the same master.
+    //
+    //   split(child_id) returns a heap-allocated IRng* keyed by the
+    //   given child_id. The caller owns the returned pointer.
+    //
+    //   The pull-API (getRng(component_path) with a slash-grammar key)
+    //   is intentionally deferred — see ADR-007 footnote.
+    // ---
+    virtual void       seedRng(uint64_t master);          // Sets the master seed and rebuilds the root RNG
+    virtual base::IRng* split(uint64_t child_id);          // Derive an independent child sub-stream (caller owns)
+    uint64_t            getMasterSeed() const;             // The currently-stored master seed (0 if never set)
+
     void updateTC(const double dt = 0.0) override;
     void updateData(const double dt = 0.0) override;
     void reset() override;
@@ -315,6 +341,15 @@ private:
    double tcLastFrameTime{0.0};                                       // Previous frame time
    bool pfts{};                                                       // Print frame timing statistics
 
+   // Hierarchical splittable RNG (ADR-007).
+   //   masterSeed_     last value passed to seedRng() (default: 0).
+   //   masterSeedSet_  has seedRng() been called at least once.
+   //   rootRng_        owning PcgRng built from masterSeed_; recreated by
+   //                   seedRng() and by reset() to keep split() byte-stable.
+   uint64_t                   masterSeed_{0};
+   bool                       masterSeedSet_{false};
+   std::unique_ptr<base::IRng> rootRng_;
+
 private:
    // slot table helper methods
    bool setSlotPlayers(base::PairStream* const);
@@ -330,6 +365,10 @@ private:
    bool setSlotNumBgThreads(const base::Integer* const);
    bool setSlotEnableFrameTiming(const base::Boolean* const);
    bool setSlotPrintFrameTimingStats(const base::Boolean* const);
+
+   // EDL slot for the RNG master seed; uses base::Number so that values
+   // larger than INT_MAX (positive uint64_t) can round-trip via asDouble().
+   bool setSlotSeedRng(const base::Number* const);
 };
 
 // Returns the timing statistics for the frames
