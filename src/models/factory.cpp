@@ -121,6 +121,8 @@
 #include "mixr/models/ubf/NoopBehavior.hpp"
 #include "mixr/models/ubf/PilotAction.hpp"
 #include "mixr/models/ubf/PilotState.hpp"
+// UBF defensive behavior (sprint-11, T-E35)
+#include "mixr/models/ubf/BeamMissileBehavior.hpp"
 
 #include "mixr/models/TargetData.hpp"
 #include "mixr/models/Track.hpp"
@@ -479,6 +481,13 @@ base::Object* factory(const std::string& name)
    }
    else if ( name == NoopBehavior::getFactoryName() ) {
       obj = new NoopBehavior();
+   }
+   // T-E35: defensive UBF tactic — turn perpendicular (beam) or 180 deg
+   // (cold abort) to the LOS of the closest incoming missile.  Replaces
+   // NoopBehavior as the production behavior for fighter agents in BVR
+   // scenarios.
+   else if ( name == BeamMissileBehavior::getFactoryName() ) {
+      obj = new BeamMissileBehavior();
    }
 
    // Collision detection component
