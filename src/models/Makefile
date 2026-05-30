@@ -101,6 +101,9 @@ OBJS =  \
 	system/Stores.o \
 	system/StoresMgr.o \
 	system/System.o \
+	ubf/NoopBehavior.o \
+	ubf/PilotAction.o \
+	ubf/PilotState.o \
 	Actions.o \
 	Designator.o \
 	Emission.o \
@@ -139,6 +142,7 @@ clean:
 	-rm -f signature/*.o
 	-rm -f system/trackmanager/*.o
 	-rm -f system/*.o
+	-rm -f ubf/*.o
 	-rm -f *.o
 	-rm -f $(LIB)
 

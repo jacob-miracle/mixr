@@ -117,6 +117,11 @@
 #include "mixr/models/SimAgent.hpp"
 #include "mixr/models/MultiActorAgent.hpp"
 
+// UBF (sprint-11, T-E34)
+#include "mixr/models/ubf/NoopBehavior.hpp"
+#include "mixr/models/ubf/PilotAction.hpp"
+#include "mixr/models/ubf/PilotState.hpp"
+
 #include "mixr/models/TargetData.hpp"
 #include "mixr/models/Track.hpp"
 
@@ -459,6 +464,21 @@ base::Object* factory(const std::string& name)
    }
    else if ( name == MultiActorAgent::getFactoryName() ) {
       obj = new MultiActorAgent();
+   }
+
+   // UBF building blocks for fighter behaviors (sprint-11, T-E34)
+   // Note: base::ubf::Agent ("UbfAgent") and base::ubf::Arbiter ("UbfArbiter")
+   // are registered in mixr/src/base/factory.cpp; EDL sees them through the
+   // base factory pass, so we only register the model-tier specialisations
+   // (state, action, no-op behavior) here.
+   else if ( name == PilotState::getFactoryName() ) {
+      obj = new PilotState();
+   }
+   else if ( name == PilotAction::getFactoryName() ) {
+      obj = new PilotAction();
+   }
+   else if ( name == NoopBehavior::getFactoryName() ) {
+      obj = new NoopBehavior();
    }
 
    // Collision detection component
