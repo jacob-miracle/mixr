@@ -220,6 +220,13 @@ protected:
    virtual bool altitudeController();
    virtual bool velocityController();
 
+   // T-E39: kinematic-steering fallback, used only when the ownship has no
+   // external DynamicsModel.  Integrates one frame of a g-limited turn /
+   // rate-limited climb / bounded accel toward the autopilot setpoints and
+   // writes the result to the Player, so UBF PilotAction setpoint changes
+   // actually steer the airframe in scenarios without a dynamics: slot.
+   virtual void flyManeuver(const double dt);
+
    virtual bool processModeNavigation();
    virtual bool processModeLoiter();
    virtual bool processModeFollowTheLead();

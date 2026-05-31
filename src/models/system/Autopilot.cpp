@@ -21,6 +21,7 @@
 #include "mixr/base/units/times.hpp"
 
 #include "mixr/base/util/nav_utils.hpp"
+#include "mixr/base/util/constants.hpp"   // T-E39: base::PI, base::ETHGM
 
 #include <cmath>
 
@@ -189,11 +190,110 @@ void Autopilot::reset()
 void Autopilot::process(const double dt)
 {
    modeManager();
-   headingController();
-   altitudeController();
-   velocityController();
+
+   // T-E39: when the ownship has no external DynamicsModel, the heading/
+   // altitude/velocity controllers below send their commands to a null
+   // DynamicsModel and the player just dead-reckons its initial state forever
+   // -- so a UBF behavior that commands a defensive heading change (via
+   // PilotAction -> setCommandedHeadingD) never actually steers the aircraft.
+   // (This was the root cause of the sprint-11/12 OR honest-null: the
+   // BVR-2v2 AirVehicles carry an Autopilot but no dynamics: slot, so the
+   // headless trajectory was arm-invariant -- see docs/sprint-12-or/
+   // distance-pk-sweep.md s8.5.)  In that case the autopilot integrates a
+   // simple kinematic turn/climb/accel toward its own setpoints so the
+   // setpoint changes are observed in the live update loop.  Scenarios that
+   // DO supply a DynamicsModel are completely unaffected (the else-branch is
+   // the original, unchanged controller path).
+   Player* pv{getOwnship()};
+   if (pv != nullptr && pv->getDynamicsModel() == nullptr) {
+      flyManeuver(dt);
+   } else {
+      headingController();
+      altitudeController();
+      velocityController();
+   }
 
    BaseClass::process(dt);
+}
+
+//------------------------------------------------------------------------------
+// flyManeuver() -- kinematic-steering fallback used ONLY when the ownship has
+// no external DynamicsModel.
+//
+// Integrates one frame of a coordinated turn toward the commanded heading, a
+// rate-limited climb toward the commanded altitude, and a bounded longitudinal
+// acceleration toward the commanded velocity, then writes the resulting Euler
+// angles + body velocity back to the Player (the same setters MIXR's RacModel
+// uses, so Player::positionUpdate() integrates the new heading next frame).
+//
+// The turn rate is g-limited (gMax * g / V), giving a ~9 deg/s break at
+// 250 m/s -- a realistic fighter defensive turn that completes well inside a
+// closing missile's time-of-flight.  Each axis honors its hold-mode flag, so
+// a level cruise (heading == current heading) is a no-op and the trajectory
+// is unchanged from the prior straight-line dead-reckoning.
+//------------------------------------------------------------------------------
+void Autopilot::flyManeuver(const double dt)
+{
+   Player* pp{getOwnship()};
+   if (pp == nullptr || dt <= 0.0) return;
+
+   constexpr double kGMax{4.0};                 // sustained-g turn limit (mirror RacModel default)
+   const double g{base::ETHGM};                 // accel of gravity (m/s^2)
+   double vt{pp->getTotalVelocity()};           // true speed (m/s)
+   if (vt < 1.0) vt = 1.0;                       // guard divide-by-zero at spawn
+
+   // --- previous angular rates (for trapezoidal integration) ----------------
+   const base::Vec3d oldRates{pp->getAngularVelocities()};
+   const double qa1{oldRates[Player::IPITCH]};
+   const double ra1{oldRates[Player::IYAW]};
+
+   // --- heading: coordinated, g-limited turn toward cmdHdg ------------------
+   const double raMax{kGMax * g / vt};           // max yaw rate (rad/s)
+   double ra{};
+   if (hdgHoldOn) {
+      ra = base::angle::aepcdRad((cmdHdg * base::angle::D2RCC) - pp->getHeadingR()) * 0.1;
+      if (ra >  raMax) ra =  raMax;
+      if (ra < -raMax) ra = -raMax;
+   }
+   double newPsi{pp->getHeading() + (ra + ra1) * dt * 0.5};
+   if (newPsi >  2.0 * base::PI) newPsi -= 2.0 * base::PI;
+   if (newPsi <  0.0)            newPsi += 2.0 * base::PI;
+
+   // --- altitude: rate-limited climb toward cmdAlt --------------------------
+   double qa{};
+   if (altHoldOn) {
+      const double maxAltRate{(maxClimbRateMps > 0.0) ? maxClimbRateMps : 50.0 * base::length::FT2M};
+      double cmdAltRate{(cmdAlt * base::length::FT2M) - pp->getAltitudeM()};
+      if (cmdAltRate >  maxAltRate) cmdAltRate =  maxAltRate;
+      if (cmdAltRate < -maxAltRate) cmdAltRate = -maxAltRate;
+      const double cmdPitch{std::asin(cmdAltRate / vt)};
+      qa = base::angle::aepcdRad(cmdPitch - pp->getPitchR()) * 0.1;
+      const double qaMax{raMax};
+      if (qa >  qaMax) qa =  qaMax;
+      if (qa < -qaMax) qa = -qaMax;
+   }
+   const double newTheta{pp->getPitch() + (qa + qa1) * dt * 0.5};
+
+   // --- bank angle: proportional to turn rate (cosmetic, for attitude) ------
+   const double newPhi{0.98 * pp->getRollR()
+                       + 0.02 * (ra / raMax * (base::angle::D2RCC * 60.0))};
+
+   // --- velocity: bounded longitudinal acceleration toward cmdSpd -----------
+   double vpdot{};
+   if (spdHoldOn) {
+      const double cmdVelMps{cmdSpd * (base::length::NM2M / 3600.0)};
+      const double maxAcc{(maxVelAccNps > 0.0) ? maxVelAccNps : 10.0};
+      vpdot = (cmdVelMps - pp->getTotalVelocity()) * 0.05;
+      if (vpdot >  maxAcc) vpdot =  maxAcc;
+      if (vpdot < -maxAcc) vpdot = -maxAcc;
+   }
+   const double newVP{pp->getTotalVelocity() + vpdot * dt};
+
+   // --- write the integrated kinematics back to the player ------------------
+   pp->setEulerAngles(newPhi, newTheta, newPsi);
+   pp->setAngularVelocities(0.0, qa, ra);
+   pp->setVelocityBody(newVP, 0.0, 0.0);
+   pp->setAccelerationBody(vpdot, 0.0, 0.0);
 }
 
 //------------------------------------------------------------------------------
