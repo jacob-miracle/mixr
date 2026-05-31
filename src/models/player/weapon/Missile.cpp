@@ -12,7 +12,11 @@
 #include "mixr/base/PairStream.hpp"
 #include "mixr/base/osg/Matrixd"
 
+#include "mixr/base/random/IRng.hpp"      // T-E37: per-missile proximity-fuze RNG sub-stream (ADR-007)
+#include "mixr/base/units/lengths.hpp"    // T-E37: maxEffectiveRange as a base::Length slot
+
 #include <cmath>
+#include <cstdint>
 
 namespace mixr {
 namespace models {
@@ -20,14 +24,15 @@ namespace models {
 IMPLEMENT_SUBCLASS(Missile, "Missile")
 
 BEGIN_SLOTTABLE(Missile)
-"minSpeed",         //  1: Minimum Velocity           (m/s)
-"maxSpeed",         //  2: Maximum Velocity           (m/s)
-"speedMaxG",        //  3: Velocity we reach max G
-"maxg",             //  4: Max G's (at "speedMaxG" or above)
-"maxAccel",         //  5: Maximum Acceleration       (m/s/s)
-"cmdPitch",         //  6: Command Pitch              (rad)
-"cmdHeading",       //  7: Command Heading            (rad)
-"cmdSpeed",         //  8: Command speed              (m/s)
+"minSpeed",          //  1: Minimum Velocity           (m/s)
+"maxSpeed",          //  2: Maximum Velocity           (m/s)
+"speedMaxG",         //  3: Velocity we reach max G
+"maxg",              //  4: Max G's (at "speedMaxG" or above)
+"maxAccel",          //  5: Maximum Acceleration       (m/s/s)
+"cmdPitch",          //  6: Command Pitch              (rad)
+"cmdHeading",        //  7: Command Heading            (rad)
+"cmdSpeed",          //  8: Command speed              (m/s)
+"maxEffectiveRange", //  9: Max effective range (Length or meters) (T-E37)
 END_SLOTTABLE(Missile)
 
 BEGIN_SLOT_MAP(Missile)
@@ -39,6 +44,8 @@ BEGIN_SLOT_MAP(Missile)
    ON_SLOT(6, setSlotCmdPitch, base::Number)
    ON_SLOT(7, setSlotCmdHeading, base::Number)
    ON_SLOT(8, setSlotCmdVelocity, base::Number)
+   ON_SLOT(9, setSlotMaxEffectiveRange, base::Length)    // T-E37: ( KiloMeters N )
+   ON_SLOT(9, setSlotMaxEffectiveRange, base::Number)    // T-E37: meters
 END_SLOT_MAP()
 
 BEGIN_EVENT_HANDLER(Missile)
@@ -86,6 +93,8 @@ void Missile::copyData(const Missile& org, const bool)
    cmdPitch = org.cmdPitch;
    cmdHeading = org.cmdHeading;
    cmdVelocity = org.cmdVelocity;
+   maxEffectiveRange = org.maxEffectiveRange;   // T-E37 (configured value carries to the flyout clone)
+   flownDistance = org.flownDistance;           // T-E37 (reset() re-zeros this for the flyout)
 }
 
 void Missile::deleteData()
@@ -98,6 +107,13 @@ void Missile::deleteData()
 void Missile::reset()
 {
    BaseClass::reset();
+
+   // T-E37: each flyout starts its cumulative-distance integral at zero.
+   // release() clones the initial weapon then calls reset() on the flyout, so
+   // this is the canonical place to (re)zero the per-flight accumulator.  It
+   // also keeps the determinism contract clean: a reset+rerun with the same
+   // master seed reproduces the same flownDistance -> effectiveness -> roll.
+   flownDistance = 0.0;
 }
 
 //------------------------------------------------------------------------------
@@ -410,30 +426,69 @@ void Missile::weaponGuidance(const double dt)
             // compare to burst radius squared
             if (r2 <= (getMaxBurstRng()*getMaxBurstRng()) ) {
 
-               // We've detonated
-               missed = false;
-               setMode(Mode::DETONATED);
-               setDetonationResults( Detonation::ENTITY_IMPACT );
+               // ---
+               // Geometric proximity hit.  Apply the distance-degraded
+               // proximity-fuze effectiveness (ADR-007 / T-E37): a missile
+               // that has flown past 70% of its maxEffectiveRange has a
+               // degraded warhead/fuze and may fail to score even on a clean
+               // geometric pass.
+               // ---
+               const double eff{fuzeEffectiveness(flownDistance, maxEffectiveRange)};
 
-               // compute location of the detonation relative to the target
-               base::Vec3d p0n = -p0;
-               if (tgt != nullptr) p0n = tgt->getRotMat() * p0n;
-               setDetonationLocation(p0n);
-
-               // Did we hit anyone?
-               checkDetonationEffect();
-
-               // Log the event
-               const double detRange = getDetonationRange();
-               if (isMessageEnabled(MSG_INFO)) {
-                  std::cout << "DETONATE_ENTITY_IMPACT rng = " << detRange << std::endl;
+               // Roll U(0,1) from a per-missile deterministic RNG sub-stream.
+               // Simulation::split(child_id) is pure in child_id, so a given
+               // (master seed, released-weapon id) always yields the same draw
+               // -> replications are reproducible while seeds vary the outcome.
+               double u{0.0};
+               if (WorldModel* wm = getWorldModel()) {
+                  if (base::IRng* rng = wm->split(fuzeRngChildId(getID()))) {
+                     u = rng->uniform();
+                     delete rng;   // caller owns the split() stream (ADR-007)
+                  }
                }
 
-               BEGIN_RECORD_DATA_SAMPLE( getWorldModel()->getDataRecorder(), REID_WEAPON_DETONATION )
-                  SAMPLE_3_OBJECTS( this, getLaunchVehicle(), getTargetPlayer() )
-                  SAMPLE_2_VALUES( static_cast<int>(Detonation::ENTITY_IMPACT), detRange )
-               END_RECORD_DATA_SAMPLE()
+               // Detonate as an entity impact only when the fuze is effective.
+               // U(0,1) < eff: eff==1.0 always hits (u<1.0); eff==0.0 never
+               // hits (u>=0.0); 0<eff<1 hits with probability eff.
+               if (u < eff) {
 
+                  // We've detonated
+                  missed = false;
+                  setMode(Mode::DETONATED);
+                  setDetonationResults( Detonation::ENTITY_IMPACT );
+
+                  // compute location of the detonation relative to the target
+                  base::Vec3d p0n = -p0;
+                  if (tgt != nullptr) p0n = tgt->getRotMat() * p0n;
+                  setDetonationLocation(p0n);
+
+                  // Did we hit anyone?
+                  checkDetonationEffect();
+
+                  // Log the event
+                  const double detRange = getDetonationRange();
+                  if (isMessageEnabled(MSG_INFO)) {
+                     std::cout << "DETONATE_ENTITY_IMPACT rng = " << detRange
+                               << " flown = " << flownDistance
+                               << " eff = " << eff << " u = " << u << std::endl;
+                  }
+
+                  BEGIN_RECORD_DATA_SAMPLE( getWorldModel()->getDataRecorder(), REID_WEAPON_DETONATION )
+                     SAMPLE_3_OBJECTS( this, getLaunchVehicle(), getTargetPlayer() )
+                     SAMPLE_2_VALUES( static_cast<int>(Detonation::ENTITY_IMPACT), detRange )
+                  END_RECORD_DATA_SAMPLE()
+
+               } else {
+                  // Within burst radius but the distance-degraded fuze failed:
+                  // leave 'missed' true so the miss path below records a
+                  // DETONATION (result=5) and orphans the target.  The geometry
+                  // was a hit; the effectiveness roll was not (T-E37).
+                  if (isMessageEnabled(MSG_INFO)) {
+                     std::cout << "FUZE_INEFFECTIVE (range-degraded) flown = "
+                               << flownDistance << " eff = " << eff
+                               << " u = " << u << std::endl;
+                  }
+               }
             }
          }
 
@@ -544,6 +599,15 @@ void Missile::weaponDynamics(const double dt)
    const base::Vec3d ve1 = va * getRotMat();
    setVelocity(ve1);
    setVelocityBody(newVP, 0.0, 0.0);
+
+   // ---
+   // T-E37: accumulate cumulative path length for distance-degraded Pk.
+   // newVP is the speed applied to this frame's translation (BaseClass::
+   // dynamics integrates position from this velocity), so newVP*dt is the
+   // path increment for the frame.  Used by weaponGuidance()'s proximity-fuze
+   // effectiveness term.
+   // ---
+   if (dt > 0.0) flownDistance += newVP * dt;
 }
 
 // setVpMin() -- set min Vp
@@ -579,6 +643,36 @@ bool Missile::setMaxAccel(const double v)
 {
    maxAccel =  v;
    return true;
+}
+
+// setMaxEffectiveRange() -- Max effective range (meters) (T-E37)
+bool Missile::setMaxEffectiveRange(const double v)
+{
+   maxEffectiveRange = v;
+   return true;
+}
+
+//------------------------------------------------------------------------------
+// T-E37 slot functions: maxEffectiveRange
+//------------------------------------------------------------------------------
+// maxEffectiveRange as a typed length, e.g. ( KiloMeters 60 )
+bool Missile::setSlotMaxEffectiveRange(const base::Length* const msg)
+{
+   bool ok{};
+   if (msg != nullptr) {
+      ok = setMaxEffectiveRange(msg->getValueInMeters());
+   }
+   return ok;
+}
+
+// maxEffectiveRange as a bare number (meters)
+bool Missile::setSlotMaxEffectiveRange(const base::Number* const msg)
+{
+   bool ok{};
+   if (msg != nullptr) {
+      ok = setMaxEffectiveRange(msg->asDouble());
+   }
+   return ok;
 }
 
 }
