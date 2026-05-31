@@ -4,6 +4,7 @@
 #include "mixr/models/ubf/PilotState.hpp"
 #include "mixr/models/ubf/PilotAction.hpp"
 #include "mixr/models/player/Player.hpp"
+#include "mixr/models/WorldModel.hpp"
 
 #include "mixr/base/numeric/Number.hpp"
 #include "mixr/base/units/length/Length.hpp"
@@ -13,11 +14,15 @@
 #include "mixr/base/ubf/AbstractAction.hpp"
 #include "mixr/base/ubf/AbstractState.hpp"
 
+// T-E36: recorder hook — route behavior phase changes through the MIXR data
+// recorder (REID_BEHAVIOR_STATE) instead of std::cout, so the event reaches the
+// WebSocket streamer as a `behavior_state` JSON event.
+#include "mixr/simulation/IDataRecorder.hpp"
+#include "mixr/simulation/dataRecorderTokens.hpp"
+#include "mixr/simulation/recorder_macros.hpp"
+
 #include <algorithm>
 #include <cmath>
-#include <iostream>
-#include <limits>
-#include <string>
 
 namespace mixr {
 namespace models {
@@ -98,16 +103,6 @@ void BeamMissileBehavior::reset()
 namespace {
 
 constexpr double kMetresPerFoot = 0.3048;
-
-const char* phaseName(BeamMissileBehavior::Phase p)
-{
-   switch (p) {
-      case BeamMissileBehavior::Phase::CRUISE:     return "CRUISE";
-      case BeamMissileBehavior::Phase::DEFENSIVE:  return "DEFENSIVE";
-      case BeamMissileBehavior::Phase::RECOVERING: return "RECOVERING";
-   }
-   return "UNKNOWN";
-}
 
 // Pick the closest entry in `incoming` (smallest slant range).  Returns
 // incoming.end() when the list is empty.
@@ -225,52 +220,51 @@ base::ubf::AbstractAction* BeamMissileBehavior::genAction(
 }
 
 // ---------------------------------------------------------------------------
-// Transition log — interim wire-shape until the recorder hook lands.
+// Transition emit (T-E36) — route the behavior phase change through the MIXR
+// data recorder as REID_BEHAVIOR_STATE.
 //
-// The line shape mirrors streamer::projectBehaviorState():
+// The recorder (DataRecorder::recordDataImp) packs the sample into a
+// pb::BehaviorStateChangeMsg and the WebSocket streamer projects it to a
+// `behavior_state` JSON event via streamer::projectBehaviorState(), which is
+// what flips the frontend HUD badge CRUISE <-> DEFENSIVE.  This replaces the
+// interim std::cout wire-shape T-E35 used before REID_BEHAVIOR_STATE existed.
 //
-//   [behavior_state] {"type":"behavior_state","sim_time":...,
-//                     "player_id":"...","behavior":"DEFENSIVE",
-//                     "params":{"beamAngle_deg":...,"losBearing_deg":...,
-//                               "triggerRange_m":...,"nearestRange_m":...}}
+// Sample layout (see dataRecorderTokens.hpp / DataRecord.proto):
+//    obj[0] => ownship Player (DataRecorder::genPlayerId fills the numeric id,
+//              so the projection's player_id matches the aircraft's
+//              player_position track and the per-player badge actually updates)
+//    val[0] => to-state code (0=CRUISE, 1=DEFENSIVE, 2=RECOVERING)
+//    val[1] => triggerRange (m);  val[2] => beamAngle (deg)
+//    val[3] => nearest incoming slant range (m), or <0 when no threat tracked
+//              (kept NaN-free so the JSON projection stays valid)
 //
-// Sim-time is omitted (we don't have a simulation clock pointer from here);
-// the recorder-side follow-up will fill it in from the DataRecorder's
-// timestamp.
+// We reach the recorder via the canonical getWorldModel()->getDataRecorder()
+// path.  getOwnship() is const and the recorder only READS the player
+// (genPlayerId takes a const Player*), so the const_cast that yields the
+// non-const recorder pointer the SAMPLE macro requires is safe.
 // ---------------------------------------------------------------------------
 void BeamMissileBehavior::emitTransition(const PilotState* const ps,
                                          Phase from, Phase to)
 {
-   std::string playerName{};
-   double nearestRange = std::numeric_limits<double>::quiet_NaN();
-   double nearestBearing = std::numeric_limits<double>::quiet_NaN();
-   if (ps != nullptr) {
-      if (const auto* p = ps->getOwnship()) {
-         playerName = p->getName();
-      }
-      const auto& incoming = ps->getIncomingWeapons();
-      const auto it = pickNearest(incoming);
-      if (it != incoming.end()) {
-         nearestRange   = it->range_m;
-         nearestBearing = it->losBearing_deg;
-      }
-   }
+   (void)from;  // 'from' is implicit in the recorder stream (the prior to_state)
 
-   std::cout << "[behavior_state] {"
-             << "\"type\":\"behavior_state\","
-             << "\"player_id\":\"" << playerName << "\","
-             << "\"from\":\"" << phaseName(from) << "\","
-             << "\"behavior\":\"" << phaseName(to) << "\","
-             << "\"params\":{"
-             << "\"activeHeading_deg\":" << activeHeading_deg
-             << ",\"activeAltitude_ft\":" << activeAltitude_ft
-             << ",\"beamAngle_deg\":" << beamAngle_deg
-             << ",\"triggerRange_m\":" << triggerRange_m;
-   if (!std::isnan(nearestRange)) {
-      std::cout << ",\"nearestRange_m\":" << nearestRange
-                << ",\"losBearing_deg\":" << nearestBearing;
-   }
-   std::cout << "}}" << std::endl;
+   if (ps == nullptr) return;
+   const Player* const own = ps->getOwnship();
+   if (own == nullptr) return;
+   WorldModel* const wm = const_cast<Player*>(own)->getWorldModel();
+   if (wm == nullptr) return;
+
+   double nearestRange = -1.0;  // <0 sentinel: no incoming weapon tracked
+   const auto& incoming = ps->getIncomingWeapons();
+   const auto it = pickNearest(incoming);
+   if (it != incoming.end()) nearestRange = it->range_m;
+
+   const double toCode = static_cast<double>(static_cast<int>(to));
+
+   BEGIN_RECORD_DATA_SAMPLE( wm->getDataRecorder(), REID_BEHAVIOR_STATE )
+      SAMPLE_1_OBJECT( own )
+      SAMPLE_4_VALUES( toCode, triggerRange_m, beamAngle_deg, nearestRange )
+   END_RECORD_DATA_SAMPLE()
 }
 
 // ---------------------------------------------------------------------------

@@ -58,6 +58,18 @@
 
 // User defined messages
 #define REID_FIRST_USER_EVENT    1000  // First user defined event
+
+// Platform-fork user events (1000..9999) ---------------------------------------
+// REID_BEHAVIOR_STATE: a UBF reactive-behavior phase transition (e.g. a
+// BeamMissileBehavior going CRUISE -> DEFENSIVE -> RECOVERING).  Emitted via
+// BEGIN_RECORD_DATA_SAMPLE() from mixr/src/models/ubf/BeamMissileBehavior.cpp
+// and handled by DataRecorder::recordDataImp(), which writes a
+// pb::BehaviorStateChangeMsg.  See ADR-009 + docs/sprint-11-or/.
+//    obj[0] => (ownship player); v[0] => to-state code (0=CRUISE,1=DEFENSIVE,
+//    2=RECOVERING); v[1] => triggerRange (m); v[2] => beamAngle (deg);
+//    v[3] => nearest incoming slant range (m), or <0 when no threat in range.
+#define REID_BEHAVIOR_STATE      1001  // UBF behavior phase transition
+
 #define REID_LAST_USER_EVENT     9999  // Last user defined event
 
 #endif

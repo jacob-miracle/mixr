@@ -67,6 +67,9 @@ message DataRecord {
    optional TrackRemovedEventMsg       track_removed_event_msg       = 72;
    optional TrackDataMsg               track_data_msg                = 73;
 
+   // Behavior messages (platform-fork; T-E36)
+   optional BehaviorStateChangeMsg     behavior_state_change_msg     = 81;
+
    extensions 500 to 999;     // Reserved
    extensions 1000 to 9999;   // User messages
 }
@@ -332,6 +335,25 @@ message TrackDataMsg {
    optional PlayerState trk_player_state  = 6;
    optional EmissionData emission_data    = 7;
    
+   extensions 50 to 99;     // Reserved fields
+   extensions 100 to 999;   // User messages
+}
+
+// -----------------------------------------------------------------------------
+// Behavior state change message (platform-fork; T-E36)
+// -- Recorded when a Player's UBF reactive behavior changes phase, e.g. a
+//    BeamMissileBehavior transitioning CRUISE -> DEFENSIVE -> RECOVERING.
+//    The streamer projects this to a `behavior_state` JSON event consumed by
+//    the frontend HUD badge (frontend/src/streamer/types.ts BehaviorStateEvent).
+// -----------------------------------------------------------------------------
+message BehaviorStateChangeMsg {
+   required PlayerId    id               = 1;   // ownship whose behavior changed
+
+   optional uint32      to_state         = 2;   // 0=CRUISE, 1=DEFENSIVE, 2=RECOVERING
+   optional double      trigger_range_m  = 3;   // configured defensive trigger range (m)
+   optional double      beam_angle_deg   = 4;   // configured beam offset from LOS (deg)
+   optional double      nearest_range_m  = 5;   // nearest incoming slant range (m); absent when no threat
+
    extensions 50 to 99;     // Reserved fields
    extensions 100 to 999;   // User messages
 }

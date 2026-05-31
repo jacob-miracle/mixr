@@ -72,6 +72,44 @@ BEGIN_RECORDER_HANDLER_TABLE(DataRecorder)
    ON_RECORDER_EVENT_ID( REID_NEW_TRACK,         recordNewTrack)
    ON_RECORDER_EVENT_ID( REID_TRACK_REMOVED,     recordTrackRemoved)
    ON_RECORDER_EVENT_ID( REID_TRACK_DATA,        recordTrackData)
+
+   // T-E36 (platform-fork): REID_BEHAVIOR_STATE — a UBF behavior phase change
+   // (CRUISE/DEFENSIVE/RECOVERING) emitted by BeamMissileBehavior.  Handled
+   // INLINE rather than through a dedicated record*() member because adding a
+   // new member would require editing DataRecorder.hpp, which is outside this
+   // task's allowed_paths.  This branch deliberately mirrors the expansion of
+   // ON_RECORDER_EVENT_ID (it is the trailing else-if before
+   // END_RECORDER_HANDLER_TABLE attaches the BaseClass fallthrough) so it runs
+   // in recordDataImp()'s body and can reach the protected genPlayerId(),
+   // timeStamp(), and sendDataRecord() helpers.
+   //    _obj[0] => ownship Player
+   //    _val[0] => to-state code (0=CRUISE, 1=DEFENSIVE, 2=RECOVERING)
+   //    _val[1] => triggerRange (m);  _val[2] => beamAngle (deg)
+   //    _val[3] => nearest incoming slant range (m), or <0 when no threat
+   (!_recorded && REID_BEHAVIOR_STATE == _id) {
+      const auto player = dynamic_cast<const models::Player*>( _obj[0] );
+      if (player != nullptr) {
+         const auto msg = new pb::DataRecord();
+
+         // DataRecord header
+         timeStamp(msg);
+         msg->set_id( REID_BEHAVIOR_STATE );
+
+         // behavior state change message
+         pb::BehaviorStateChangeMsg* behaviorMsg { msg->mutable_behavior_state_change_msg() };
+         genPlayerId( behaviorMsg->mutable_id(), player );
+         behaviorMsg->set_to_state( static_cast<unsigned int>(_val[0]) );
+         behaviorMsg->set_trigger_range_m( _val[1] );
+         behaviorMsg->set_beam_angle_deg( _val[2] );
+         if (_val[3] >= 0.0) behaviorMsg->set_nearest_range_m( _val[3] );
+
+         // Send the message for processing
+         sendDataRecord(msg);
+
+         _recorded = true;
+      }
+   }
+   else if
 END_RECORDER_HANDLER_TABLE()
 
 DataRecorder::DataRecorder()
