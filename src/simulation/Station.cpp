@@ -18,12 +18,24 @@
 #include "mixr/base/numeric/Integer.hpp"
 #include "mixr/base/numeric/Number.hpp"
 #include "mixr/base/units/times.hpp"
+#include "mixr/base/random/IRng.hpp"
+
+// T-E38: Station::reset() assigns a faction-pool callsign to every player and
+// stores it on the concrete models::Player.  This reaches "up" from the
+// simulation tier into the models tier for the single purpose of calling
+// Player::setCallsign() (the callsign field lives on models::Player because
+// simulation::IPlayer is outside this task's scope).  The headless link wraps
+// the mixr libraries in a single --start-group so this models<->simulation
+// reference resolves; see tools/run/CMakeLists.txt.
+#include "mixr/models/player/Player.hpp"
 
 #include "StationTcPeriodicThread.hpp"
 #include "StationBgPeriodicThread.hpp"
 #include "StationNetPeriodicThread.hpp"
 
 #include <ctime>
+#include <map>
+#include <memory>
 
 namespace mixr {
 namespace simulation {
@@ -196,6 +208,46 @@ void Station::deleteData()
 }
 
 //------------------------------------------------------------------------------
+// T-E38: deterministic faction-pool callsign assignment (ADR-007).
+//
+// Walks the player list in list order and assigns each "blue*"/"red*" player a
+// callsign drawn from its faction pool via Simulation::split(childId(faction)).
+// The result is stored on the Player and re-derived byte-identically on the wire
+// by streamer::json_projection, so the campaign side and the WebSocket stream
+// never disagree.  Players whose name does not match a faction prefix, or whose
+// pool file is missing, are left without a callsign (the wire defaults such a
+// player to its player_id -- backward compatible).
+//------------------------------------------------------------------------------
+namespace {
+void assignFactionCallsigns(Simulation* const sim, base::PairStream* const players)
+{
+   if (sim == nullptr || players == nullptr) return;
+   std::map<std::string, std::vector<std::string>> poolCache;   // faction -> pool (loaded once)
+   for (base::List::Item* item = players->getFirstItem(); item != nullptr; item = item->getNext()) {
+      const auto pair = static_cast<base::Pair*>(item->getValue());
+      if (pair == nullptr) continue;
+      auto* const p = dynamic_cast<models::Player*>(pair->object());
+      if (p == nullptr) continue;
+      std::string faction;
+      int idx0 {0};
+      if (!models::callsign::parseName(p->getName(), faction, idx0)) continue;
+      auto it = poolCache.find(faction);
+      if (it == poolCache.end()) {
+         it = poolCache.emplace(faction,
+                  models::callsign::loadPool(models::callsign::poolPath(faction))).first;
+      }
+      const std::vector<std::string>& pool {it->second};
+      if (pool.empty()) continue;
+      const std::unique_ptr<base::IRng> fr {sim->split(models::callsign::childId(faction))};
+      const std::string cs {models::callsign::pick(pool, *fr, idx0)};
+      p->setCallsign(cs);
+      std::cout << "Station: callsign assigned -> " << p->getName() << " = " << cs
+                << " (side=" << faction << ")" << std::endl;
+   }
+}
+} // namespace
+
+//------------------------------------------------------------------------------
 // reset() -- Reset the station
 //------------------------------------------------------------------------------
 void Station::reset()
@@ -206,6 +258,14 @@ void Station::reset()
 
    // Reset our major subsystems
    if (sim != nullptr) sim->event(RESET_EVENT);
+
+   // T-E38: assign faction-pool callsigns now that the simulation (and its RNG
+   // root) has reset and the player list is live.
+   {
+      base::PairStream* const players {getPlayers()};
+      assignFactionCallsigns(sim, players);
+      if (players != nullptr) players->unref();
+   }
 
    // ---
    // Reset the ownship pointer

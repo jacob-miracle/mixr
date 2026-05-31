@@ -11,11 +11,19 @@
 #include "mixr/base/osg/Matrixd"
 #include "mixr/base/osg/Quat"
 
+#include "mixr/base/random/IRng.hpp"   // T-E38: faction-pool callsign assignment (ADR-007)
+
 #include "mixr/base/units/util/angle_utils.hpp"
 #include "mixr/base/units/util/length_utils.hpp"
 
 #include <array>
+#include <cctype>     // T-E38
+#include <cstdint>    // T-E38
+#include <cstdio>     // T-E38
+#include <cstdlib>    // T-E38
 #include <string>
+#include <utility>    // T-E38 (std::swap)
+#include <vector>     // T-E38
 
 namespace mixr {
 namespace base { class Angle; class Boolean; class Integer; class Latitude; class Length; class List; class Longitude;
@@ -43,6 +51,103 @@ class IrQueryMsg;
 class IrSignature;
 class RfSignature;
 class Track;
+
+//------------------------------------------------------------------------------
+// Faction-pool callsign assignment (T-E38, ADR-007)
+//
+// Deterministic, collision-free callsign assignment shared by two consumers so
+// the sim-side store and the wire-side projection never disagree:
+//
+//   * simulation::Station::reset() (sim side) draws each player's callsign from
+//     its faction pool via Simulation::split(childId) and stores it on the
+//     Player (setCallsign).
+//   * streamer::json_projection (wire side) re-derives the IDENTICAL callsign
+//     so every player_position event carries "callsign":"<value>".
+//
+// Both sides obtain a faction-scoped RNG sub-stream the same way: the sim via
+// Simulation::split(childId(faction)); the wire via PcgRng(masterSeed).split(
+// childId(faction)).  PcgRng::split() is const on the parent's state, so the
+// two sub-streams are byte-identical whenever the master seeds match -- and the
+// headless host's default master seed is 0 (it does not yet wire --seed and no
+// scenario sets the seedRng slot), so the wire and the sim agree in practice.
+//
+// The determinism-critical core (parseName / childId / withSuffix / pick) is
+// inline here so the header-only unit test and BOTH libraries share ONE
+// definition; only the file I/O (loadPool / poolDir / poolPath) is out-of-line
+// in Player.cpp.
+//------------------------------------------------------------------------------
+namespace callsign {
+
+// Parse a faction player name ("blue1", "RED2", "blue") into a lowercase faction
+// token ("blue"/"red") and a 0-based faction-local index (trailing integer minus
+// one; 0 when absent).  Returns false when the name does not begin with a known
+// faction prefix -- matching streamer::sideStr()'s existing name-prefix
+// convention, so the wire and the sim agree on which pool a player draws from.
+inline bool parseName(const std::string& name, std::string& factionOut, int& idx0Out)
+{
+   std::string n;
+   n.reserve(name.size());
+   for (const char c : name) n += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+   if      (n.rfind("blue", 0) == 0) factionOut = "blue";
+   else if (n.rfind("red",  0) == 0) factionOut = "red";
+   else return false;
+   // Trailing integer -> 0-based index (default 0 when no trailing digits).
+   std::size_t i {n.size()};
+   while (i > 0 && std::isdigit(static_cast<unsigned char>(n[i - 1])) != 0) --i;
+   long num {0};
+   if (i < n.size()) num = std::strtol(n.c_str() + i, nullptr, 10);
+   idx0Out = (num > 0) ? static_cast<int>(num - 1) : 0;
+   return true;
+}
+
+// Stable RNG child-id for a faction's callsign sub-stream.  Distinct per faction
+// and offset into a private namespace so it cannot alias another consumer's
+// split() child-id.  Computed identically on the sim and wire sides.
+inline std::uint64_t childId(const std::string& faction)
+{
+   std::uint64_t h {1469598103934665603ULL};        // FNV-1a offset basis
+   for (const char c : faction) { h ^= static_cast<unsigned char>(c); h *= 1099511628211ULL; }
+   return h ^ 0xCA11516000000000ULL;                 // "CALLSIGN" namespace tag
+}
+
+// Append a 2-digit reuse suffix ("-01".."-99"+) when the faction pool is
+// exhausted (more players than callsigns), so assignments never collide.
+inline std::string withSuffix(const std::string& base, const int cycle)
+{
+   if (cycle <= 0) return base;
+   char buf[12];
+   std::snprintf(buf, sizeof(buf), "-%02d", cycle);
+   return base + buf;
+}
+
+// Deterministically permute `pool` with `rng` (Fisher-Yates) and return the
+// callsign for 0-based faction-local index `idx0`.  When idx0 >= pool.size() the
+// base callsign repeats with a "-NN" suffix (cycle = idx0 / N) so callsigns stay
+// unique within a faction.  Returns "" for an empty pool or negative index.
+inline std::string pick(std::vector<std::string> pool, base::IRng& rng, const int idx0)
+{
+   const std::size_t n {pool.size()};
+   if (n == 0 || idx0 < 0) return std::string{};
+   for (std::size_t i {n - 1}; i > 0; --i) {
+      const std::uint64_t r {rng.next_u64() % static_cast<std::uint64_t>(i + 1)};
+      std::swap(pool[i], pool[static_cast<std::size_t>(r)]);
+   }
+   const std::size_t k {static_cast<std::size_t>(idx0) % n};
+   const int cycle {idx0 / static_cast<int>(n)};
+   return withSuffix(pool[k], cycle);
+}
+
+// Out-of-line (Player.cpp): load a newline-delimited pool file.  Blank lines and
+// lines beginning with '#' are skipped; surrounding whitespace is trimmed.
+// Returns an empty vector on failure.
+std::vector<std::string> loadPool(const std::string& path);
+// Out-of-line (Player.cpp): directory holding the faction pool files
+// (env SIM_CALLSIGN_DIR, else "data/callsigns").
+std::string poolDir();
+// Out-of-line (Player.cpp): full path to "<faction>force.txt" under poolDir().
+std::string poolPath(const std::string& faction);
+
+} // namespace callsign
 
 //------------------------------------------------------------------------------
 // Class: Player
@@ -403,6 +508,9 @@ public:
    const base::String* getType_old() const      { return type_old; }            // The player's type string (e.g., "F-16C")
    const std::string& getType() const           { return type; }                // The player's type string (e.g., "F-16C")
 
+   const std::string& getCallsign() const       { return callsign; }            // T-E38: assigned faction-pool callsign (empty if unset)
+   bool hasCallsign() const                     { return !callsign.empty(); }   // T-E38: true once a callsign has been assigned
+
    Side getSide() const                         { return side; }                // The 'side' that the player is on.
    bool isSide(const unsigned int x) const      { return ((x & side) != 0); }   // True if player is with one of these (bit-wise or'd) sides
    bool isNotSide(const unsigned int x) const   { return ((x & side) == 0); }   // True if player is not with one one of these (bit-wise or'd) sides
@@ -658,6 +766,7 @@ public:
 
    bool setType(const std::string&);                           // Sets the player's type string
    bool setType_old(const base::String* const);                // Sets the player's type string
+   bool setCallsign(const std::string&);                       // T-E38: Sets the player's assigned faction-pool callsign
    void setSide(const Side);                                   // Sets the player's side enum
    bool setUseCoordSys(const CoordSys);                        // Sets the coord system to use for updating position
 
@@ -940,6 +1049,7 @@ private:
    // ---
    base::safe_ptr<base::String> type_old;  // type of vehicle
    std::string type;                       // type of vehicle
+   std::string callsign;                   // T-E38: faction-pool callsign (empty until Station init assigns one)
    Side side {GRAY};                       // side player associated with
 
    // ---

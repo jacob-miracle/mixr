@@ -51,10 +51,51 @@
 #include "mixr/base/util/nav_utils.hpp"
 
 #include <cmath>
+#include <cstdlib>    // T-E38 (std::getenv)
+#include <fstream>    // T-E38 (callsign pool file load)
 #include <string>
 
 namespace mixr {
 namespace models {
+
+// ---------------------------------------------------------------------------
+// T-E38: out-of-line callsign-pool helpers (declared in Player.hpp).  The
+// determinism-critical core (parseName / childId / pick) is inline in the
+// header; only the file I/O lives here so <fstream> stays out of the widely
+// included Player.hpp.
+// ---------------------------------------------------------------------------
+namespace callsign {
+
+std::vector<std::string> loadPool(const std::string& path)
+{
+   std::vector<std::string> out;
+   std::ifstream in(path);
+   if (!in) return out;
+   std::string line;
+   while (std::getline(in, line)) {
+      const std::size_t b {line.find_first_not_of(" \t\r\n")};
+      if (b == std::string::npos) continue;                 // blank line
+      const std::size_t e {line.find_last_not_of(" \t\r\n")};
+      const std::string tok {line.substr(b, e - b + 1)};
+      if (tok.empty() || tok[0] == '#') continue;           // comment / empty
+      out.push_back(tok);
+   }
+   return out;
+}
+
+std::string poolDir()
+{
+   const char* const env {std::getenv("SIM_CALLSIGN_DIR")};
+   if (env != nullptr && env[0] != '\0') return std::string(env);
+   return "data/callsigns";
+}
+
+std::string poolPath(const std::string& faction)
+{
+   return poolDir() + "/" + faction + "force.txt";
+}
+
+} // namespace callsign
 
 IMPLEMENT_SUBCLASS(Player, "Player")
 
@@ -284,6 +325,7 @@ void Player::copyData(const Player& org, const bool cc)
    setType_old( const_cast<base::String*>(static_cast<const base::String*>(tt)) );
 
    side = org.side;
+   callsign = org.callsign;   // T-E38: preserve the assigned faction-pool callsign across copy/clone
 
    latitude = org.latitude;
    longitude = org.longitude;
@@ -1583,6 +1625,13 @@ bool Player::setType_old(const base::String* const x)
    } else {
       type_old = nullptr;
    }
+   return true;
+}
+
+// T-E38: Sets the player's assigned faction-pool callsign (e.g. "VIPER").
+bool Player::setCallsign(const std::string& x)
+{
+   callsign = x;
    return true;
 }
 
