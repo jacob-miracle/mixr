@@ -344,8 +344,20 @@ void AirTrkMgr::processTrackList(const double dt)
             std::cout << "New AIR track[it] = [" << nTrks << "] id = " << newTrk->getTrackID() << std::endl;
          }
 
+         // T-G18 fix: record the just-created track (newTrk), NOT tracks[i].
+         // `i` indexes the emission-REPORT array, not the track array, and
+         // tracks[i] is not assigned until the line below.  At report index i
+         // the tracks[] slot holds a stale/aged-out (often unref'd, freed)
+         // pointer left over after the track-aging compaction above, so the
+         // DataRecorder's dynamic_cast<Track*> in recordNewTrack() dereferences
+         // a dangling vtable and SIGSEGVs.  This only bit when the recorder was
+         // active AND tracks churned (e.g. a defensive aircraft beaming targets
+         // in/out of its radar FOV); straight-and-level flight never aged a
+         // track so tracks[i] stayed null/valid and the bug hid.  GmtiTrkMgr
+         // and RwrTrkMgr already pass newTrk here — this aligns AirTrkMgr with
+         // them.
          BEGIN_RECORD_DATA_SAMPLE( getWorldModel()->getDataRecorder(), REID_NEW_TRACK )
-            SAMPLE_2_OBJECTS( ownship, tracks[i] )
+            SAMPLE_2_OBJECTS( ownship, newTrk )
          END_RECORD_DATA_SAMPLE()
 
          tracks[nTrks++] = newTrk;
