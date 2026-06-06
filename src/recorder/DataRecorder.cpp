@@ -840,6 +840,23 @@ void DataRecorder::genPlayerId(pb::PlayerId* const id, const models::Player* con
          id->set_id( player->getID() );
          id->set_name(player->getName().c_str());
 
+         // Entity-kind discriminator on the wire (T-E41 / EN-1, ADR-009).
+         // major_type is the coarse MajorType enum (AIR_VEHICLE / GROUND_VEHICLE
+         // / SHIP / BUILDING / WEAPON / LIFE_FORM / SPACE_VEHICLE / GENERIC); the
+         // streamer maps it to a canonical kind string and the renderer selects a
+         // model from it.  ac_type is the player's specific designation string
+         // from its EDL `type:` slot (getType(), e.g. "F-44", "plan_ddg1",
+         // "sam_site_a").  Both are additive PlayerId fields (5 and 6) that have
+         // existed in the schema since the recorder's inception but were never
+         // populated.  ac_type is only set when non-empty so a consumer never
+         // mistakes an empty string for a real designation.  See
+         // docs/design/adr-009-entity-kind-on-wire.md.
+         id->set_major_type( player->getMajorType() );
+         const std::string& acType {player->getType()};
+         if (!acType.empty()) {
+            id->set_ac_type( acType.c_str() );
+         }
+
          // Networked player federation name
          if ( player->isProxyPlayer() ) {
             const simulation::INib* nib {player->getNib()};
