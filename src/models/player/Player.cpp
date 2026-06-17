@@ -323,6 +323,10 @@ void Player::copyData(const Player& org, const bool cc)
 
    const base::String* tt{org.type_old};
    setType_old( const_cast<base::String*>(static_cast<const base::String*>(tt)) );
+   type = org.type;   // T-E52 (DS-01): copy the std::string type getType()/recorder read;
+                      // a flyout clone defaults setType("GenericMissile") in its ctor, so
+                      // without this the weapon's typed designation (e.g. "AIM-280") is lost
+                      // and every released round streams ac_type:"GenericMissile" on the wire.
 
    side = org.side;
    callsign = org.callsign;   // T-E38: preserve the assigned faction-pool callsign across copy/clone
